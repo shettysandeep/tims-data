@@ -6,10 +6,13 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # ~~~~~~~~~ Load packages
-source("code/packages_needed.R")
+suppressMessages(source("code/packages_needed.R"))
 
-# ~~~~~~ Read Data
-gen_start_data <- function(file_path = "data/floridaOCE.RDS") {
+# ~~~~~~~ Path to data
+path_to_data <- "data/floridaOCE.RDS"
+
+# ~~~~~~ Read and Clean Data
+clean_data <- function(file_path) {
   # ......................................
   # Function to set up starting data
   # to ease resetting data upon errors
@@ -17,74 +20,79 @@ gen_start_data <- function(file_path = "data/floridaOCE.RDS") {
   # ......................................
   dats <- readRDS(file_path)
   dats <- dats[dats$MATCH == "1", ]
-  names(dats) <- tolower(names(dats))
-  # ... Clean some variables
-  dats$sale.to.minor <- as.integer(dats$sale.to.minor)
-  dats$inspect.dt <- lubridate::as_date(dats$inspection.date,
+  names(dats) <- tolower(names(dats)) %>%
+    stringr::str_replace_all(., "\\.", "_")
+
+  # ... Keep only FL
+  dats <- dats %>% filter(grepl("FL", rei))
+
+
+  # ... Variable conversions
+  dats$sale_to_minor <- as.integer(dats$sale_to_minor)
+  dats$inspect_dt <- lubridate::as_date(dats$inspection_date,
     format = "%m/%d/%Y"
   )
   # ... Subset variables
   keep_vars <- c(
     "rei", "type", "outcome",
-    "category",
-    "sale.to.minor", "city",
-    "longitude", "latitude",
-    "inspect.dt", "zip"
+    "category", "sale_to_minor",
+    "city", "longitude", "latitude",
+    "inspect_dt", "zip"
   )
   dats <- dats %>% select(all_of(keep_vars))
 
   # ... Re-arrange, create some variables
-  dats <- dats %>% mutate(inspect.year = lubridate::
-  year(inspect.dt))
+  dats <- dats %>% mutate(inspect_year = lubridate::
+  year(inspect_dt))
   dats <- dats %>%
-    group_by(rei, inspect.year) %>%
-    mutate(insp.in.year = n())
+    group_by(rei, inspect_year) %>%
+    mutate(insp_in_year = n())
   dats <- dats %>%
-    group_by(zip, inspect.year) %>%
-    mutate(insp.in.zip.year = n())
+    group_by(zip, inspect_year) %>%
+    mutate(insp_in_zip_year = n())
 
-# Create days between inspections within a zip code
+  # Create days between inspections within a zip code
   insp_min_date <- dats %>%
-    group_by(zip, inspect.year) %>%
+    group_by(zip, inspect_year) %>%
     summarise(
-      min_dat = min(inspect.dt),
+      min_dat = min(inspect_dt),
       .groups = "drop"
     )
 
-  # ... (average) duration between inspections in {zip-year}  
-  dats <- merge(dats, insp_min_date, by = c("zip", "inspect.year"))
-  dats <- dats %>% mutate(insp_days = (inspect.dt - min_dat))
+  # ... (average) duration between inspections in {zip-year}
+  dats <- merge(dats, insp_min_date, by = c("zip", "inspect_year"))
+  dats <- dats %>% mutate(insp_days = (inspect_dt - min_dat))
   dats <- dats %>%
-    group_by(zip, inspect.year) %>%
-    mutate(avg_insp_zip_yr = mean(insp_days))
+    group_by(zip, inspect_year) %>%
+    mutate(avg_days_insp_zip_yr = mean(insp_days))
 
   # ... convert lat and long into numeric
-  cols.num <- c("latitude", "longitude")
-  dats[cols.num] <- sapply(dats[cols.num], as.numeric)
+  cols_num <- c("latitude", "longitude")
+  dats[cols_num] <- sapply(dats[cols_num], as.numeric)
   dats$rei <- as.factor(dats$rei)
   dats$zip <- as.factor(dats$zip)
-  dats <- dats %>% filter(inspect.year != 2014)
+  dats <- dats %>% filter(inspect_year != 2014)
   return(dats)
 }
 
 # ~~~~~~ Run function to import data
-fl <- gen_start_data()
+fl <- clean_data(path_to_data)
 
 # ~~~~~~ Calculate Distance Between Retailers
 # Unique REIs only
-fl.uniq <- fl[!duplicated(fl$rei), ]
+fl_uniq <- fl[!duplicated(fl$rei), ]
 
-# .. keep if more than 1 retailers in zip code
-fl.uniq <- fl.uniq %>%
+# ~~~~~~ keep if more than 1 retailers in zip code
+fl_uniq <- fl_uniq %>%
   group_by(zip) %>%
   mutate(totn = n()) %>%
   ungroup()
 
-fl.uniq <- fl.uniq %>% filter(totn > 1)
-fl.uniq <- fl.uniq %>% filter(!fl.uniq$rei == "NJ707536")
-fl.uniq$index_no <- seq(1, nrow(fl.uniq))
+fl_uniq <- fl_uniq %>% filter(totn > 1)
+fl_uniq <- fl_uniq %>% filter(!fl_uniq$rei == "NJ707536")
+fl_uniq$index_no <- seq(1, nrow(fl_uniq))
 
-#~~~~~~ Calculating "Haversine" distance between retailers
+# ~~~~~~ Calculating "Haversine" distance between retailers
 distance_calc <- function(dat) {
   # ...................................................
   # To minimize processing, distance is calculated only between retailers
@@ -93,19 +101,18 @@ distance_calc <- function(dat) {
   # Output: distance (meters) matrix between retailers within same zip code
   # ....................................................
   dim1 <- nrow(dat)
-  distanceMatrix <- matrix(nrow = dim1, ncol = dim1)
+  distance_matrix <- matrix(nrow = dim1, ncol = dim1)
   dat1 <- dat %>% select(index_no, rei, zip, longitude, latitude)
-  # dat1 <- dat1 %>% filter()
   for (zyp in levels(dat1$zip)) {
-    LongLat <- dat1 %>% filter(zip == zyp)
-    for (i in LongLat$index_no) {
-      lati <- LongLat$latitude[which(LongLat$index_no == i)]
-      loni <- LongLat$longitude[which(LongLat$index_no == i)]
-      for (j in LongLat$index_no) {
+    geo_data <- dat1 %>% filter(zip == zyp)
+    for (i in geo_data$index_no) {
+      lati <- geo_data$latitude[which(geo_data$index_no == i)]
+      loni <- geo_data$longitude[which(geo_data$index_no == i)]
+      for (j in geo_data$index_no) {
         if (i > j) {
-          latj <- LongLat$latitude[which(LongLat$index_no == j)]
-          lonj <- LongLat$longitude[which(LongLat$index_no == j)]
-          distanceMatrix[i, j] <- geosphere::distm(
+          latj <- geo_data$latitude[which(geo_data$index_no == j)]
+          lonj <- geo_data$longitude[which(geo_data$index_no == j)]
+          distance_matrix[i, j] <- geosphere::distm(
             c(loni, lati),
             c(lonj, latj)
           )
@@ -113,23 +120,23 @@ distance_calc <- function(dat) {
       }
     }
   }
-  return(distanceMatrix)
+  return(distance_matrix)
 }
 
 # Calculate distance between retailers
-distanceMatrix <- distance_calc(dat = fl.uniq)
-distanceMatrix <- distanceMatrix / 1604 # in miles
+distance_matrix <- distance_calc(dat = fl_uniq)
+distance_matrix <- distance_matrix / 1604 # in miles
 
 # ~~~~~~~ Indicator for retailers within a 'x' miles of a retailer
-no_ret_miles <- function(miles, distMatrix) {
+no_ret_miles <- function(miles, dist_matrix) {
   # .............................................
   # Input: distance matrix assumed
   # Input: enter miles to use from each retailer
   # output a matrix with 1/0 to indicate retailers is within x-mile
   # distance of a retailer
   # ..................................
-  neighbor.in.x <- apply(distMatrix, 2, function(x) (x <= miles) / 1)
-  return(neighbor.in.x)
+  neighbor_in_x <- apply(dist_matrix, 2, function(x) (x <= miles) / 1)
+  return(neighbor_in_x)
 }
 
 # ~~~~~~~~ Roll up stats for each retailer-year
@@ -137,52 +144,52 @@ no_ret_miles <- function(miles, distMatrix) {
 # ....to output table --> {REI|Year|#violations|#count}
 # ....merge this o/p to the main data set
 
-# Neighbors within x=1 mile distance of a given REI
-neighbor.in.x <- no_ret_miles(
+# ~~~~~~~ Neighbors within x=1 mile distance of a given REI
+neighbor_in_x <- no_ret_miles(
   miles = 1,
-  distMatrix = distanceMatrix
+  dist_matrix = distance_matrix
 )
 
-# Row and column names for easy indexing/look-up
-rownames(neighbor.in.x) <- fl.uniq$rei
-colnames(neighbor.in.x) <- fl.uniq$rei
+# Row and column names for look-up using REI
+rownames(neighbor_in_x) <- fl_uniq$rei
+colnames(neighbor_in_x) <- fl_uniq$rei
 
 rei_ng <- function(reid) {
-  #......................................................
+  # ......................................................
   # Calculates for the number of inspection and violations
   # with a given radius of a retailer for each year
   # Output: Dataframe
   # .....................................................
-  select.reis <- names(which(neighbor.in.x[, reid] == 1))
-  if (length(select.reis) > 0) {
-    temp.dat <- fl %>% filter(rei %in% select.reis)
-    new.temp.dat <- (temp.dat %>%
-      group_by(inspect.year) %>%
+  select_reis <- names(which(neighbor_in_x[, reid] == 1))
+  if (length(select_reis) > 0) {
+    temp_dat <- fl %>% filter(rei %in% select_reis)
+    new_temp_dat <- temp_dat %>%
+      group_by(inspect_year) %>%
       # no of inspections
       mutate(
-        neigh.insp.cnt = n(),
+        neigh_insp_cnt = n(),
         # violations
-        neigh.viol.cnt = sum(sale.to.minor)
-      ))
-    new.tmp.dat1 <- new.temp.dat %>% distinct(
-      inspect.year,
-      neigh.insp.cnt,
-      neigh.viol.cnt
-    )
-    new.tmp.dat1$rei <- reid # add REI id
-    return(new.tmp.dat1)
+        neigh_viol_cnt = sum(sale_to_minor)
+      ) %>%
+      distinct(
+        inspect_year,
+        neigh_insp_cnt,
+        neigh_viol_cnt
+      )
+    new_temp_dat$rei <- reid # add REI id
+    return(new_temp_dat)
   }
 }
 
-#~~~~~~ Create a data frame with violations in neighboring retailers
-neigh.viols <- function() {
+
+# ~~~~~~ Create a data frame with violations in neighboring retailers
+neigh_viols <- function() {
   # ...............................................
   # calculate number of inspections and violation within a defined
   # radius of each retailer by year
-  #................................................
+  # ................................................
   newdat <- data.frame()
-  for (rei_id in fl.uniq$rei) {
-    ## print(rei_id)
+  for (rei_id in fl_uniq$rei) {
     datInt <- rei_ng(rei_id)
     newdat <- rbind(newdat, datInt)
   }
@@ -191,19 +198,20 @@ neigh.viols <- function() {
 
 ### save this data as it is not efficiently executed
 ## ....
-if (file.exists("data/neighViolation.RDS")) {
-  newdat <- readRDS(intdat, "data/neighViolations.RDS")
+if (file.exists("data/neighViolations.RDS")) {
+  neigh_viols_data <- load("data/neighViolations.RDS")
 } else {
-  newdat <- neigh.viols()
+  neigh_viols_data <- neigh_viols()
+  saveRDS(object = neigh_viols_data, file = "data/neighViolations.RDS")
 }
 
+# combine neighborhood violations
+fl_neigh_viol <- fl %>% left_join(neigh_viols_data, by = c("rei", "inspect_year"))
 
 # average distance between retailers within zip
 
-
-
 # who was the first to be inspected
-
+fl_neigh_viol
 # which group was inspected
 
 # one retailer or a group of retailers inspected first
