@@ -5,13 +5,13 @@
 # Sandeep Shetty
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-# ~~~~~~~~~ Load packages
+# >>> Load packages <<<
 suppressMessages(source("code/packages_needed.R"))
 
-# ~~~~~~~ Path to data
+# >>> Path to data <<<
 path_to_data <- "data/floridaOCE.RDS"
 
-# ~~~~~~ Read and Clean Data
+# >>> Read and Clean Data <<<
 clean_data <- function(file_path) {
   # ......................................
   # Function to set up starting data
@@ -25,7 +25,6 @@ clean_data <- function(file_path) {
 
   # ... Keep only FL
   dats <- dats %>% filter(grepl("FL", rei))
-
 
   # ... Variable conversions
   dats$sale_to_minor <- as.integer(dats$sale_to_minor)
@@ -75,14 +74,14 @@ clean_data <- function(file_path) {
   return(dats)
 }
 
-# ~~~~~~ Run function to import data
+# >>> Run function to import data
 fl <- clean_data(path_to_data)
 
-# ~~~~~~ Calculate Distance Between Retailers
+# >>> Calculate Distance Between Retailers
 # Unique REIs only
 fl_uniq <- fl[!duplicated(fl$rei), ]
 
-# ~~~~~~ keep if more than 1 retailers in zip code
+# >>> keep if more than 1 retailers in zip code
 fl_uniq <- fl_uniq %>%
   group_by(zip) %>%
   mutate(totn = n()) %>%
@@ -92,7 +91,7 @@ fl_uniq <- fl_uniq %>% filter(totn > 1)
 fl_uniq <- fl_uniq %>% filter(!fl_uniq$rei == "NJ707536")
 fl_uniq$index_no <- seq(1, nrow(fl_uniq))
 
-# ~~~~~~ Calculating "Haversine" distance between retailers
+# >>> Calculating "Haversine" distance between retailers
 distance_calc <- function(dat) {
   # ...................................................
   # To minimize processing, distance is calculated only between retailers
@@ -123,11 +122,11 @@ distance_calc <- function(dat) {
   return(distance_matrix)
 }
 
-# Calculate distance between retailers
+# >>> Calculate distance between retailers
 distance_matrix <- distance_calc(dat = fl_uniq)
 distance_matrix <- distance_matrix / 1604 # in miles
 
-# ~~~~~~~ Indicator for retailers within a 'x' miles of a retailer
+# >>>  Indicator for retailers within a 'x' miles of a retailer
 no_ret_miles <- function(miles, dist_matrix) {
   # .............................................
   # Input: distance matrix assumed
@@ -139,21 +138,22 @@ no_ret_miles <- function(miles, dist_matrix) {
   return(neighbor_in_x)
 }
 
-# ~~~~~~~~ Roll up stats for each retailer-year
+# >>>  Roll up stats for each retailer-year
 # ....for violations in a x-mile neighborhood
 # ....to output table --> {REI|Year|#violations|#count}
 # ....merge this o/p to the main data set
 
-# ~~~~~~~ Neighbors within x=1 mile distance of a given REI
+# >>>  Neighbors within x=1 mile distance of a given REI
 neighbor_in_x <- no_ret_miles(
   miles = 1,
   dist_matrix = distance_matrix
 )
 
-# Row and column names for look-up using REI
+#... Row and column names for look-up using REI
 rownames(neighbor_in_x) <- fl_uniq$rei
 colnames(neighbor_in_x) <- fl_uniq$rei
 
+# >>> Calculates the number of inspection and violations
 rei_ng <- function(reid) {
   # ......................................................
   # Calculates for the number of inspection and violations
@@ -181,12 +181,14 @@ rei_ng <- function(reid) {
   }
 }
 
-
-# ~~~~~~ Create a data frame with violations in neighboring retailers
+# >>> Create a data frame with violations in neighboring retailers
 neigh_viols <- function() {
   # ...............................................
   # calculate number of inspections and violation within a defined
   # radius of each retailer by year
+  # See function rei_ng for miles inputed (def = 1 miles)
+  # output is a summary of violations and inspections 
+  # within a mile of a given retailer (grouped by year)
   # ................................................
   newdat <- data.frame()
   for (rei_id in fl_uniq$rei) {
@@ -196,37 +198,45 @@ neigh_viols <- function() {
   return(newdat)
 }
 
-### save this data as it is not efficiently executed
-## ....
+# >>> save this data as it is not efficiently executed
 if (file.exists("data/neighViolations.RDS")) {
-  neigh_viols_data <- load("data/neighViolations.RDS")
+  neigh_viols_data <- readRDS("data/neighViolations.RDS")
 } else {
   neigh_viols_data <- neigh_viols()
   saveRDS(object = neigh_viols_data, file = "data/neighViolations.RDS")
 }
 
-# combine neighborhood violations
-fl_neigh_viol <- fl %>% left_join(neigh_viols_data, by = c("rei", "inspect_year"))
+# >>> combine neighborhood violations
+fl_neigh_viol <- fl %>% left_join(neigh_viols_data, 
+                                  by = c("rei", "inspect_year"))
+# >>> replace "NA" in violation and inspections as O
+fl_neigh_viol <- fl_neigh_viol %>% 
+  dplyr::mutate(neigh_insp_cnt = replace_na(neigh_insp_cnt, 0),
+                neigh_viol_cnt = replace_na(neigh_viol_cnt, 0))
 
-# average distance between retailers within zip
+# >>> average distance between retailers within zip 
+avg_distance_ret_zip <- colSums(distance_matrix, 
+        na.rm=TRUE)/colSums(!is.na(distance_matrix))
 
-# who was the first to be inspected
-fl_neigh_viol
-# which group was inspected
+avg_distance_ret_zip <- avg_distance_ret_zip %>% 
+  as_tibble() %>% 
+  mutate(rei = fl_uniq$rei)
 
-# one retailer or a group of retailers inspected first
+# >>> merge with 
+fl_neigh_viol <- fl_neigh_viol %>%
+  left_join(avg_distance_ret_zip, by = c("rei")) %>%
+  rename(avg_dist_zip = value)
+
+# >>> who was the first to be inspected
+fl_neigh_viol <- fl_neigh_viol %>%
+    mutate(
+      first_inspected = case_when(
+        insp_days==0 ~ 1, TRUE  ~ 0))
+
+# >>> Pending Feature Engineering
+#... which group was inspected
+#... one retailer or a group of retailers inspected first
 
 
 
-# Understand relationship of inspection and violation within zip-level
-# How should be estimate the impact of neighborhood inspections on
-# own violations.
-# Need to consider the timing of these inspections
 
-
-# need to figure out timing on inspections,
-# follow-up information
-# indicator for who is inspected before or after
-# some more indicators
-# then take to the model
-# then think
