@@ -237,6 +237,7 @@ fl_neigh_viol <- fl_neigh_viol %>%
 #... which group was inspected
 #... one retailer or a group of retailers inspected first
 
-
+# >>> save file
+saveRDS(fl_neigh_viol, file = "data/floridaOCEClean.RDS")
 
 
