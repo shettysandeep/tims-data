@@ -6,7 +6,16 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # >>> Load packages <<<
-suppressMessages(source("code/packages_needed.R"))
+#.......Packages needed
+want <- c('tidyverse','lubridate',
+         'geosphere','tidymodels', 
+         'doParallel', 'tibble',
+         'skimr')
+#......Check, Install, Load packages
+have <- want %in% rownames(installed.packages())
+if (any(!have)){install.packages(want[!have])}
+sapply(want, library, character.only = TRUE)
+rm(have, want)
 
 # >>> Path to data <<<
 path_to_data <- "data/floridaOCE.RDS"
