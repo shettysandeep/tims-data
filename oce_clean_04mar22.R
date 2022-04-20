@@ -245,6 +245,19 @@ fl_neigh_viol <- fl_neigh_viol %>%
 # >>> Pending Feature Engineering
 #... which group was inspected
 #... one retailer or a group of retailers inspected first
+#... minimum distance of those inspected before (same year + previous year)
+#... mean distance of those inspected before
+#... minimum distance of those insp+violated before
+#... mean distance of those insp+violated before
+
+# >>> data type conversion
+fl_neigh_viol$insp_days <- fl_neigh_viol$insp_days %>% as.numeric()
+fl_neigh_viol$avg_insp_zip_yr <- fl_neigh_viol$avg_insp_zip_yr %>%
+    as.numeric() %>%
+    replace(is.na(.),0)
+fl_neigh_viol <- fl_neigh_viol %>% na.omit()
+fl_neigh_viol <- fl_neigh_viol %>% filter(!is.na(avg_dist_zip))
+
 
 # >>> save file
 saveRDS(fl_neigh_viol, file = "data/floridaOCEClean.RDS")
