@@ -1,19 +1,22 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# OCE-TIMS Data Set Up
-# Spatial effects of retailer inspection (local neighborhood)
+# OCE-TIMS Retailer Inspection Data
 # Mar 3, 2022
 # Sandeep Shetty
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 # >>> Load packages <<<
-#.......Packages needed
-want <- c('tidyverse','lubridate',
-         'geosphere','tidymodels', 
-         'doParallel', 'tibble',
-         'skimr')
-#......Check, Install, Load packages
+# .......Packages needed
+want <- c(
+  "tidyverse", "lubridate",
+  "geosphere", "tidymodels",
+  "doParallel", "tibble",
+  "skimr"
+)
+# ......Check, Install, Load packages
 have <- want %in% rownames(installed.packages())
-if (any(!have)){install.packages(want[!have])}
+if (any(!have)) {
+  install.packages(want[!have])
+}
 sapply(want, library, character.only = TRUE)
 rm(have, want)
 
@@ -134,6 +137,10 @@ distance_calc <- function(dat) {
 distance_matrix <- distance_calc(dat = fl_uniq)
 distance_matrix <- distance_matrix / 1604 # in miles
 
+# ... Row and column names for look-up using REI
+rownames(distance_matrix) <- fl_uniq$rei
+colnames(distance_matrix) <- fl_uniq$rei
+
 # >>>  Indicator for retailers within a 'x' miles of a retailer
 no_ret_miles <- function(miles, dist_matrix) {
   # .............................................
@@ -157,7 +164,7 @@ neighbor_in_x <- no_ret_miles(
   dist_matrix = distance_matrix
 )
 
-#... Row and column names for look-up using REI
+# ... Row and column names for look-up using REI
 rownames(neighbor_in_x) <- fl_uniq$rei
 colnames(neighbor_in_x) <- fl_uniq$rei
 
@@ -195,7 +202,7 @@ neigh_viols <- function() {
   # calculate number of inspections and violation within a defined
   # radius of each retailer by year
   # See function rei_ng for miles inputed (def = 1 miles)
-  # output is a summary of violations and inspections 
+  # output is a summary of violations and inspections
   # within a mile of a given retailer (grouped by year)
   # ................................................
   newdat <- data.frame()
@@ -215,50 +222,107 @@ if (file.exists("data/neighViolations.RDS")) {
 }
 
 # >>> combine neighborhood violations
-fl_neigh_viol <- fl %>% left_join(neigh_viols_data, 
-                                  by = c("rei", "inspect_year"))
+fl_neigh_viol <- fl %>% left_join(neigh_viols_data,
+  by = c("rei", "inspect_year")
+)
 # >>> replace "NA" in violation and inspections as O
-fl_neigh_viol <- fl_neigh_viol %>% 
-  dplyr::mutate(neigh_insp_cnt = replace_na(neigh_insp_cnt, 0),
-                neigh_viol_cnt = replace_na(neigh_viol_cnt, 0))
+fl_neigh_viol <- fl_neigh_viol %>%
+  dplyr::mutate(
+    neigh_insp_cnt = replace_na(neigh_insp_cnt, 0),
+    neigh_viol_cnt = replace_na(neigh_viol_cnt, 0)
+  )
 
-# >>> average distance between retailers within zip 
-avg_distance_ret_zip <- colSums(distance_matrix, 
-        na.rm=TRUE)/colSums(!is.na(distance_matrix))
+# >>> average distance between retailers within zip
+avg_distance_ret_zip <- colSums(distance_matrix,
+  na.rm = TRUE
+) / colSums(!is.na(distance_matrix))
 
-avg_distance_ret_zip <- avg_distance_ret_zip %>% 
-  as_tibble() %>% 
+avg_distance_ret_zip <- avg_distance_ret_zip %>%
+  as_tibble() %>%
   mutate(rei = fl_uniq$rei)
 
-# >>> merge with 
+# >>> merge with
 fl_neigh_viol <- fl_neigh_viol %>%
   left_join(avg_distance_ret_zip, by = c("rei")) %>%
   rename(avg_dist_zip = value)
 
 # >>> who was the first to be inspected
 fl_neigh_viol <- fl_neigh_viol %>%
-    mutate(
-      first_inspected = case_when(
-        insp_days==0 ~ 1, TRUE  ~ 0))
+  mutate(
+    first_inspected = case_when(
+      insp_days == 0 ~ 1, TRUE ~ 0
+    )
+  )
 
 # >>> Pending Feature Engineering
-#... which group was inspected
-#... one retailer or a group of retailers inspected first
-#... minimum distance of those inspected before (same year + previous year)
-#... mean distance of those inspected before
-#... minimum distance of those insp+violated before
-#... mean distance of those insp+violated before
+# ... inspected in cluster (a.k.a. same day with many retailers)
+fl_neigh_viol <- fl_neigh_viol %>%
+  group_by(zip, inspect_year, inspect_dt) %>%
+  mutate(clstinsptemp = n()) %>%
+  mutate(clust_insp = case_when(
+    clstinsptemp > 1 ~ 1, TRUE ~ 0
+  ))
+
+# ... one retailer or a group of retailers inspected first in the zip
+first_insp <- fl_neigh_viol %>%
+  filter(first_inspected == 1) %>%
+  group_by(zip, inspect_year) %>%
+  select(rei) %>%
+  ungroup()
+
+# ... distance from a retailer inspected nearest in days (ago)
+ 
+fl_neigh_viol <- fl_neigh_viol %>% ungroup() 
+nneigh_insp <- function(rei_id, zip1, yr_insp, days_before) {
+  if (days_before > 0) {
+    collect_zips <- fl_neigh_viol %>% 
+      filter(
+        insp_days < days_before,
+        inspect_year == yr_insp,
+        zip == zip1
+      ) %>%
+      select(zip) %>%
+      pull() %>%
+      unique()
+    if (length(collect_zips) > 0) {
+      tryCatch({dist_neigh <- distance_matrix[rei_id, collect_zips]},
+               {error = return(NA)})
+      return(min(dist_neigh))
+    }
+  }
+  return(NA)
+}
+
+#... 
+fl_neigh_viol <-
+  fl_neigh_viol %>%
+  rowwise() %>%
+  mutate(nrst_ngh_insptd = nneigh_insp(rei, zip, inspect_year, insp_days))
+
+# split the column into two separate obes
+#fl_neigh_viol <- fl_neigh_viol %>% tidyr::unnest_wider(newvar)
+
+# ... nearest retailer inspected in distance before
+
+# ... mean distance of those inspected before
+# ... minimum distance of those insp+violated before
+# ... mean distance of those insp+violated before
 
 # >>> data type conversion
 fl_neigh_viol$insp_days <- fl_neigh_viol$insp_days %>% as.numeric()
 fl_neigh_viol$avg_insp_zip_yr <- fl_neigh_viol$avg_insp_zip_yr %>%
-    as.numeric() %>%
-    replace(is.na(.),0)
+  as.numeric() %>%
+  replace(is.na(.), 0)
 fl_neigh_viol <- fl_neigh_viol %>% na.omit()
 fl_neigh_viol <- fl_neigh_viol %>% filter(!is.na(avg_dist_zip))
 
 
 # >>> save file
 saveRDS(fl_neigh_viol, file = "data/floridaOCEClean.RDS")
+write.csv(fl_neigh_viol,
+  file = "data/florida_tims_clean.csv",
+  row.names = FALSE
+)
 
 
+FL618115
