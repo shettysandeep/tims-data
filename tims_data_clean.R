@@ -254,7 +254,7 @@ fl_neigh_viol <- fl_neigh_viol %>%
     )
   )
 
-# >>> Pending Feature Engineering
+
 # ... inspected in cluster (a.k.a. same day with many retailers)
 fl_neigh_viol <- fl_neigh_viol %>%
   group_by(zip, inspect_year, inspect_dt) %>%
@@ -271,44 +271,90 @@ first_insp <- fl_neigh_viol %>%
   ungroup()
 
 # ... distance from a retailer inspected nearest in days (ago)
- 
-fl_neigh_viol <- fl_neigh_viol %>% ungroup() 
-nneigh_insp <- function(rei_id, zip1, yr_insp, days_before) {
-  if (days_before > 0) {
-    collect_zips <- fl_neigh_viol %>% 
-      filter(
-        insp_days < days_before,
-        inspect_year == yr_insp,
-        zip == zip1
-      ) %>%
-      select(zip) %>%
-      pull() %>%
-      unique()
-    if (length(collect_zips) > 0) {
-      tryCatch({dist_neigh <- distance_matrix[rei_id, collect_zips]},
-               {error = return(NA)})
-      return(min(dist_neigh))
+
+fl_neigh_viol <- fl_neigh_viol %>% ungroup()
+
+# focusing only non 1 timers
+fl_not_first <- fl_neigh_viol %>%
+  filter(first_inspected == 0)
+
+# function that applies only to rei's that are not the first ones
+# inspected in their {zip-year}
+
+nneigh_insp_test2 <- function(rei_id, zip1, yr_insp, days_before) {
+  collect_rei <- fl_neigh_viol[
+    which(fl_neigh_viol$insp_days < days_before &
+      fl_neigh_viol$inspect_year == yr_insp &
+      fl_neigh_viol$zip == zip1 &
+      fl_neigh_viol$rei != rei_id),
+    c("rei")
+  ]
+  collect_rei <- unique((as.vector(collect_rei[[1]])))
+  print(is.vector(collect_rei))
+  if (length(collect_rei) > 0) {
+    # lower tri-matrix - subsetting
+    dist_neigh <- distance_matrix[
+      collect_rei,
+      rei_id
+    ]
+    print(dist_neigh)
+    if (sum(!is.na(dist_neigh)) > 0) {
+      return(min(dist_neigh, na.rm = TRUE))
     }
   }
   return(NA)
 }
+# nneigh_insp <- function(rei_id, zip1, yr_insp, days_before) {
+#   #if (days_before > 0) {
+#    collect_rei <- fl_neigh_viol %>%
+#       filter(
+#         insp_days < days_before,
+#         inspect_year == yr_insp,
+#         zip == zip1,
+#         rei != rei_id
+#       ) %>%
+#       select(rei) %>%
+#       unique() %>%
+#       pull()
+#      if (length(collect_rei) > 0) {
+#       #try(
+#         #{
+#       dist_neigh <- distance_matrix[collect_rei, rei_id] #lower tri matrix
+#         if (sum(!is.na(dist_neigh)) > 0){
+#           return(min(dist_neigh, na.rm=TRUE))}
+#         }
+#         #)
+#    return(NA)
+#     }
+# }
+# return(NA)
+# }
 
-#... 
-fl_neigh_viol <-
-  fl_neigh_viol %>%
-  rowwise() %>%
-  mutate(nrst_ngh_insptd = nneigh_insp(rei, zip, inspect_year, insp_days))
+library(parallel)
+nrst_ngh_insptd_bef <- mcmapply(
+  nneigh_insp_test2, fl_neigh_viol$rei,
+  fl_neigh_viol$zip,
+  fl_neigh_viol$inspect_year,
+  fl_neigh_viol$insp_days
+)
 
-# split the column into two separate obes
-#fl_neigh_viol <- fl_neigh_viol %>% tidyr::unnest_wider(newvar)
+fl_neigh_viol <- cbind(fl_neigh_viol, nrst_ngh_insptd_bef)
 
-# ... nearest retailer inspected in distance before
+# ...
+# fl_neigh_viol <-
+#  fl_neigh_viol %>%
+#  dplyr::rowwise() %>%
+#  mutate(nrst_ngh_insptd = nneigh_insp(rei, zip, inspect_year, insp_days))
 
+# split the column into two separate columms
+# fl_neigh_viol <- fl_neigh_viol %>% tidyr::unnest_wider(newvar)
+
+# >>> Pending Feature Engineering
 # ... mean distance of those inspected before
 # ... minimum distance of those insp+violated before
 # ... mean distance of those insp+violated before
 
-# >>> data type conversion
+# >>> data type conversion - implement in analysis file
 fl_neigh_viol$insp_days <- fl_neigh_viol$insp_days %>% as.numeric()
 fl_neigh_viol$avg_insp_zip_yr <- fl_neigh_viol$avg_insp_zip_yr %>%
   as.numeric() %>%
@@ -323,6 +369,3 @@ write.csv(fl_neigh_viol,
   file = "data/florida_tims_clean.csv",
   row.names = FALSE
 )
-
-
-FL618115
